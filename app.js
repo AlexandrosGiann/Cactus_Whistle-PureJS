@@ -16,7 +16,7 @@ var el = {
   record: $('recordButton'), recordLabel: $('recordLabel'), file: $('audioFile'), sample: $('sampleButton'),
   language: $('language'), mode: $('mode'), clip: $('clip'), player: $('player'), clipInfo: $('clipInfo'),
   runBar: $('runBar'), runStatus: $('runStatus'), transcript: $('transcript'), details: $('details'),
-  copy: $('copyButton'), meter: $('meter'), diagLog: $('diagLog'), diagCopy: $('diagCopy')
+  copy: $('copyButton'), meter: $('meter'), diagLog: $('diagLog'), diagCopy: $('diagCopy'), micTest: $('micTest'), micSetup: $('micSetup')
 };
 
 var engine = null;          // { transcribe(pcm, opts, handlers) }
@@ -189,8 +189,44 @@ function linearResample(input, fromRate, frames) {
   return out;
 }
 
+var AMR_URL = 'vendor/amrnb.js';
+var amrLoading = null;
+
+function startsWith(ab, text) {
+  if (ab.byteLength < text.length) return false;
+  var u = new Uint8Array(ab, 0, text.length);
+  for (var i = 0; i < text.length; i++) if (u[i] !== text.charCodeAt(i)) return false;
+  return true;
+}
+
+// The AMR decoder (opencore-amr compiled to plain asm.js, about 0.5 MB) is fetched on first use.
+function loadAmr() {
+  if (window.AMR) return Promise.resolve(window.AMR);
+  if (!amrLoading) {
+    amrLoading = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = AMR_URL;
+      s.onload = function () { if (window.AMR) resolve(window.AMR); else reject(new Error('the AMR decoder did not start')); };
+      s.onerror = function () { amrLoading = null; reject(new Error(AMR_URL + ' could not be loaded')); };
+      document.head.appendChild(s);
+    });
+  }
+  return amrLoading;
+}
+
+// AMR-NB, the format of phone voice recorders: 8 kHz speech frames after a "#!AMR" line.
+function decodeAmr(ab) {
+  return loadAmr().then(function (AMR) {
+    var pcm = AMR.decode(new Uint8Array(ab));
+    if (!pcm || !pcm.length) throw new Error('the AMR file holds no decodable audio');
+    return resample(new Float32Array(pcm), 8000);
+  });
+}
+
 // Any file the browser can decode becomes 16 kHz mono float samples.
 function decodeFile(ab) {
+  if (startsWith(ab, '#!AMR-WB\n')) return Promise.reject(new Error('AMR-WB is not supported, only AMR-NB (.amr)'));
+  if (startsWith(ab, '#!AMR\n')) return decodeAmr(ab);
   var direct = parsePcm16Wav(ab);
   if (direct) return Promise.resolve(direct);
   var Ctx = window.AudioContext || window.webkitAudioContext;
@@ -250,6 +286,50 @@ var recorder = new WhistleRecorder.Recorder({
   onEnded: function () { stopRecording(); }
 });
 
+// The capture setup found by the microphone test is remembered per browser.
+var SETUP_KEY = 'whistleMicSetup';
+try { recorder.setConfig(localStorage.getItem(SETUP_KEY) || ''); } catch (e) {}
+
+function showSetup() {
+  var html = '';
+  for (var i = 0; i < WhistleRecorder.CONFIGS.length; i++) {
+    var c = WhistleRecorder.CONFIGS[i];
+    html += '<option value="' + c.name + '"' + (c === recorder.config ? ' selected' : '') + '>' + c.name + ': ' + c.label + '</option>';
+  }
+  el.micSetup.innerHTML = html;
+}
+
+function chooseSetup(name) {
+  if (!recorder.setConfig(name)) return;
+  try { localStorage.setItem(SETUP_KEY, name); } catch (e) {}
+  diag('capture setup set to ' + name);
+  showSetup();
+}
+
+var testing = false;
+
+function runMicTest() {
+  if (testing || busy || recorder.state !== 'idle') return;
+  testing = true;
+  el.runStatus.classList.remove('error');
+  setRun('Microphone test: keep talking for about 15 seconds...', 0);
+  updateButtons();
+  diag('--- microphone test: ' + WhistleRecorder.CONFIGS.length + ' setups, 2.5 s each; keep talking');
+  recorder.probe(2500).then(function (r) {
+    testing = false;
+    if (r.best) {
+      chooseSetup(r.best);
+      setRun('Microphone test: "' + r.best + '" delivers sound and is now selected. Try Record.', 1);
+    } else {
+      fail('Microphone test: this browser delivered no sound with any setup. The log below has the details.');
+    }
+    updateButtons();
+  }, function (e) {
+    testing = false;
+    fail('Microphone test failed: ' + (e.message || e));
+  });
+}
+
 function recordingUi(on) {
   el.record.classList.toggle('recording', on);
   el.recordLabel.textContent = on ? 'Stop' : 'Record';
@@ -277,8 +357,9 @@ function stopRecording() {
   recorder.stop().then(function (r) {
     recordingUi(false);
     return resample(r.samples, r.rate).then(function (pcm) {
+      var lv = WhistleRecorder.levels(pcm);
       diag('ready for the model: ' + pcm.length + ' samples at ' + RATE + ' Hz (' + (pcm.length / RATE).toFixed(2) +
-        ' s) from ' + r.source);
+        ' s) from ' + r.source + ', peak ' + lv.peak.toFixed(4) + ', RMS ' + lv.rms.toFixed(4));
       run(pcm, r.source === 'pcm' ? 'Recording' : 'Recording (MediaRecorder)');
     });
   }, function (e) {
@@ -292,8 +373,9 @@ function stopRecording() {
 
 function updateButtons() {
   var idle = ready && !busy;
-  var mic = recorder.state !== 'idle';
-  el.record.disabled = !(idle || mic);
+  var mic = recorder.state !== 'idle' || testing;
+  el.record.disabled = !(idle || mic) || testing;
+  el.micTest.disabled = busy || mic;
   el.file.disabled = !idle || mic;
   el.sample.disabled = !idle || mic;
   el.file.parentNode.classList.toggle('disabled', el.file.disabled);
@@ -392,6 +474,8 @@ el.record.onclick = function () {
   else if (recorder.state === 'recording') stopRecording();
   else diag('tap ignored while ' + recorder.state);
 };
+el.micTest.onclick = runMicTest;
+el.micSetup.onchange = function () { chooseSetup(el.micSetup.value); };
 el.diagCopy.onclick = function () {
   var text = diagLines.join('\n');
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text);
@@ -420,7 +504,8 @@ el.copy.onclick = function () {
   setTimeout(function () { el.copy.textContent = 'Copy'; }, 1200);
 };
 
-recorder.probe();
+recorder.probeEnvironment();
+showSetup();
 updateButtons();
 fetchModel().then(installModel).catch(function (e) {
   el.modelStatus.textContent = 'Automatic model download failed (' + (e.message || e) +

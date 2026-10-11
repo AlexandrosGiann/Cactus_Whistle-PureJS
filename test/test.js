@@ -60,5 +60,15 @@ CASES.forEach(function (c) {
 var forced = model.transcribe(cli.readWav(path.join(root, 'test/audio/jfk.wav')).samples.subarray(0, 60000), { language: 'pl' });
 check(forced.language === 'pl' && forced.text === 'And so my fellow Americans.', 'forced language keeps the transcript: ' + JSON.stringify(forced.text));
 
+// AMR-NB through the bundled decoder: the same speech after a 12.2 kbit/s, 8 kHz round trip
+var amrFile = path.join(root, 'test/audio/jfk.amr');
+if (fs.existsSync(amrFile) && fs.existsSync(path.join(root, 'vendor/amrnb.js'))) {
+  console.log('test/audio/jfk.amr');
+  var amr = cli.readAmr(amrFile);
+  check(amr.rate === 8000 && Math.abs(amr.samples.length / 8000 - 11) < 0.1, 'decodes to ' + (amr.samples.length / 8000).toFixed(2) + ' s at 8 kHz');
+  var fromAmr = model.transcribe(cli.resample(amr.samples, 8000, 16000));
+  check(/ask not what your country can do for you/i.test(fromAmr.text) && fromAmr.language === 'en', 'transcript ' + JSON.stringify(fromAmr.text));
+} else console.log('test/audio/jfk.amr\n  skip  not in this checkout');
+
 console.log(failed ? failed + ' check(s) failed' : 'all checks passed');
 process.exitCode = failed ? 1 : 0;

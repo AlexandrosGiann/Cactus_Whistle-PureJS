@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* Command line front end: node whistle_cli.js clip.wav [--language en] [--greedy] [--json] [--model whistle.cact] */
+/* Command line front end: node whistle_cli.js clip.wav|clip.amr [--language en] [--greedy] [--json] [--model whistle.cact] */
 'use strict';
 
 var fs = require('fs'), path = require('path');
@@ -38,6 +38,28 @@ function readWav(file) {
   throw new Error('WAV data chunk missing');
 }
 
+// AMR-NB (.amr, as phone voice recorders write it) through the bundled opencore-amr build.
+// The library is a browser script, so it runs in its own context here.
+var amrLib = null;
+function readAmr(file) {
+  var bytes = new Uint8Array(fs.readFileSync(file));
+  if (Buffer.from(bytes.subarray(0, 9)).toString('latin1') === '#!AMR-WB\n') throw new Error(file + ' is AMR-WB; only AMR-NB is supported');
+  if (Buffer.from(bytes.subarray(0, 6)).toString('latin1') !== '#!AMR\n') throw new Error(file + ' is not an AMR-NB file');
+  if (!amrLib) {
+    // a fresh context brings its own typed arrays, which is what asm.js validation expects
+    var vm = require('vm'), box = { console: { log: function () {}, warn: function () {}, error: function () {} } };
+    box.window = box; box.self = box;
+    vm.createContext(box);
+    vm.runInContext(fs.readFileSync(path.join(__dirname, 'vendor', 'amrnb.js'), 'utf8'), box, { filename: 'amrnb.js' });
+    amrLib = box.AMR;
+  }
+  var pcm = amrLib.decode(bytes);
+  if (!pcm || !pcm.length) throw new Error(file + ' holds no decodable AMR frames');
+  return { samples: Float32Array.from(pcm), rate: 8000 };
+}
+
+function readAudio(file) { return /\.amr$/i.test(file) ? readAmr(file) : readWav(file); }
+
 // Windowed-sinc resampler, good enough for speech when the file is not 16 kHz.
 function resample(x, from, to) {
   if (from === to) return x;
@@ -69,12 +91,12 @@ function main(argv) {
     else opts.files.push(a);
   }
   if (opts.help || !opts.files.length) {
-    console.log('usage: node whistle_cli.js clip.wav [more.wav] [--language en|de|fr|es|it|nl|pl] [--greedy] [--json] [--model whistle.cact]');
+    console.log('usage: node whistle_cli.js clip.wav|clip.amr [more] [--language en|de|fr|es|it|nl|pl] [--greedy] [--json] [--model whistle.cact]');
     return opts.help ? 0 : 1;
   }
   var model = new Whistle.Model(fs.readFileSync(opts.model));
   opts.files.forEach(function (file) {
-    var wav = readWav(file), pcm = resample(wav.samples, wav.rate, 16000);
+    var wav = readAudio(file), pcm = resample(wav.samples, wav.rate, 16000);
     var r = model.transcribe(pcm, { language: opts.language, beams: opts.beams });
     if (opts.json) {
       console.log(JSON.stringify({ file: file, text: r.text, language: r.language, seconds: pcm.length / 16000,
@@ -89,4 +111,4 @@ function main(argv) {
 }
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
-module.exports = { readWav: readWav, resample: resample };
+module.exports = { readWav: readWav, readAmr: readAmr, readAudio: readAudio, resample: resample };

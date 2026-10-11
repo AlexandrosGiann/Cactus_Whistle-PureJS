@@ -8,19 +8,20 @@
 'use strict';
 
 var path = require('path');
-var Recorder = require(path.join(__dirname, '..', 'recorder.js')).Recorder;
+var lib = require(path.join(__dirname, '..', 'recorder.js')), Recorder = lib.Recorder;
 
 var failed = 0;
 function check(ok, what) { console.log((ok ? '  ok   ' : '  FAIL ') + what); if (!ok) failed++; }
 
 // A fake browser. opts: { suspended, resumeWorks, callbacksRun, silent, mediaRecorder, mrEmpty,
-//   rejectDetailed, deny, legacy, noBlobDecode }
+//   rejectDetailed, deny, legacy, noBlobDecode, decodedSilent,
+//   works(config) -> whether that capture setup carries sound }
 function world(opts) {
   opts = opts || {};
   var w = { clock: 0, logs: [], timers: [], contexts: [], gumCalls: [], decoded: 0 };
   function FakeContext() {
     this.state = opts.suspended ? 'suspended' : 'running';
-    this.sampleRate = 48000; this.destination = {}; this.closed = false;
+    this.sampleRate = 48000; this.destination = {}; this.closed = false; this.currentTime = 0;
     w.contexts.push(this); w.ctx = this;
   }
   FakeContext.prototype.resume = function () {
@@ -61,7 +62,11 @@ function world(opts) {
     setTimeout: function (f, ms) { w.timers.push({ f: f, at: w.clock + ms }); return w.timers.length; },
     clearTimeout: function (id) { if (id && w.timers[id - 1]) w.timers[id - 1].f = null; },
     decodeBlob: opts.noBlobDecode ? function () { return Promise.reject(new Error('cannot decode')); }
-      : function () { w.decoded++; return Promise.resolve(new Float32Array(32000).fill(0.1)); },
+      : function () {
+        w.decoded++;
+        var loud = opts.works ? opts.works(w.rec.active) : !opts.decodedSilent;
+        return Promise.resolve(new Float32Array(32000).fill(loud ? 0.1 : 0));
+      },
     onEnded: function () { w.ended = (w.ended || 0) + 1; }
   };
   // advance the clock, delivering audio callbacks only while the context runs
@@ -70,9 +75,9 @@ function world(opts) {
     while (w.clock < end) {
       w.clock += 85;
       w.timers.forEach(function (t) { if (t.f && t.at <= w.clock) { var f = t.f; t.f = null; f(); } });
-      if (w.ctx && w.ctx.state === 'running' && w.proc && w.proc.onaudioprocess && opts.callbacksRun !== false) {
+      if (w.ctx && !w.ctx.closed && w.ctx.state === 'running' && w.proc && w.proc.onaudioprocess && opts.callbacksRun !== false) {
         var d = new Float32Array(4096);
-        if (!opts.silent) d.fill(0.25);
+        if (opts.works ? opts.works(w.rec.active) : !opts.silent) d.fill(0.25);
         w.proc.onaudioprocess({ inputBuffer: { getChannelData: function () { return d; } } });
       }
     }
@@ -156,6 +161,41 @@ async function main() {
   await w.rec.start(); w.advance(1500);
   check(w.ended >= 1, 'the time limit asks the page to stop');
   await w.rec.stop();
+
+  console.log('silence from the browser (the Firefox on Android 5 failure)');
+  w = world({ callbacksRun: false, mediaRecorder: true, decodedSilent: true });
+  await w.rec.start(); w.advance(5000); c = await code(w.rec.stop());
+  check(c === 'silent', 'silent MediaRecorder data is reported as silence, not sent to the model (' + c + ')');
+  check(w.rec.last.callbacks === 0 && w.rec.last.blobBytes === 4321 && w.rec.last.decodedPeak === 0, 'callback count, blob size and decoded peak are kept for the report');
+  check(/decoded MediaRecorder data: 32000 samples.*peak 0\.0000, RMS 0\.0000/.test(w.logs.join('\n')), 'decoded peak and RMS are logged');
+
+  console.log('capture setups');
+  w = world({ mediaRecorder: true });
+  await w.rec.start(lib.CONFIGS[2]); w.advance(1000); r = await w.rec.stop();
+  check(w.contexts.length === 1 && w.gumCalls[0].audio === true && r.config === 'plain-late', 'plain-late asks for audio: true and opens one context, after the stream');
+  check(w.logs.join('\n').indexOf('ScriptProcessor -> destination') >= 0, 'plain-late connects the processor straight to the destination');
+  w = world({ mediaRecorder: true });
+  await w.rec.start(lib.CONFIGS[4]); w.advance(1000); r = await w.rec.stop();
+  check(w.contexts.length === 0 && r.source === 'mediarecorder', 'recorder-only uses no AudioContext');
+  w = world({});
+  check(await code(w.rec.start(lib.CONFIGS[4])) === 'unsupported', 'recorder-only without MediaRecorder is refused');
+
+  console.log('microphone test across setups');
+  async function runProbe(world) {
+    var result = null, spins = 0;
+    world.rec.probe(2000).then(function (x) { result = x; });
+    while (!result && spins++ < 600) { world.advance(170); await new Promise(function (ok) { setImmediate(ok); }); }
+    return result;
+  }
+  w = world({ mediaRecorder: true, works: function (cfg) { return cfg.name === 'voice-late' || cfg.name === 'recorder-only'; } });
+  var result = await runProbe(w);
+  check(result && result.results.length === 5, 'all five setups are tried');
+  check(result && result.best === 'voice-late', 'the first setup with real PCM is chosen (' + (result && result.best) + ')');
+  check(result && result.results[0].error === 'silent' && result.results[3].source === 'pcm', 'each setup reports what it delivered');
+  w = world({ mediaRecorder: true, works: function () { return false; } });
+  result = await runProbe(w);
+  check(result && result.best === null && w.rec.state === 'idle', 'no working setup is reported as such');
+  check(lib.browserName('Mozilla/5.0 (Android 5.1.1; Mobile; rv:68.0) Gecko/68.0 Firefox/68.0') === 'Firefox 68.0 on Android 5.1.1', 'Firefox and Android versions are read from the user agent');
 
   console.log(failed ? failed + ' check(s) failed' : 'all checks passed');
   process.exitCode = failed ? 1 : 0;

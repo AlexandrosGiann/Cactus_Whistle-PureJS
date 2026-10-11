@@ -82,16 +82,58 @@ mobile Chrome keeps such a context suspended: no audio callbacks ever ran, so no
 - reports what actually happened: permission denied, no microphone, only silence delivered, or no
   audio arrived, instead of one generic message.
 
-**Microphone diagnostics**, under the Audio buttons, lists what the browser offers (secure context,
-permission state, `MediaRecorder` and its formats) and, for every recording, the audio context
-state and sample rate, the track settings, the number of audio callbacks and PCM samples, the peak
-level, the `MediaRecorder` blob type and size, and the decoded sample count. "Copy log" puts it on
-the clipboard. `node test/test_recorder.js` exercises these paths with stand-in browser objects.
+**Microphone diagnostics**, under the Audio buttons, lists what the browser offers (browser and
+Android version, secure context, permission state, supported constraints, `MediaRecorder` and its
+formats) and, for every recording, the audio context state and sample rate, the track state and
+settings, the number of audio callbacks and PCM samples, peak and RMS level, the `MediaRecorder`
+blob type and size, and the peak and RMS of the decoded audio. "Copy log" puts it on the clipboard.
+
+#### When the browser delivers silence
+
+On a Lenovo A2020a40 (Android 5.1) with Firefox, the microphone indicator is on, yet the audio
+context reports `running` with zero `ScriptProcessor` callbacks, and `MediaRecorder` produces about
+3 KB of Opus for 5 s, which decodes to silence. Both capture paths are starved inside the browser,
+so no single known fix applies. Two things changed:
+
+- A capture that decodes to silence is now reported as "the browser delivered only silence"
+  instead of being sent to the model and coming back as "(no speech detected)".
+- **Run microphone test** records 2.5 s with each of five capture setups while you keep talking,
+  prints one line per setup (callbacks, PCM peak and RMS, recorder bytes, decoded peak and RMS),
+  and selects the first one that carries sound. The choice is remembered in that browser and can
+  be changed by hand in the **Setup** list.
+
+| setup | what it changes |
+|---|---|
+| `raw` (default) | echo cancellation, noise suppression and gain control off; audio context opened in the tap |
+| `plain` | the browser's default constraints (`audio: true`) |
+| `plain-late` | default constraints, audio context opened after the stream, processor wired straight to the output |
+| `voice-late` | voice processing explicitly on, otherwise as `plain-late` |
+| `recorder-only` | no Web Audio while recording; `MediaRecorder` alone, decoded afterwards |
+
+Whether any of them works on that phone is not known: it has to be run there. If the test reports
+that no setup delivers sound, the browser itself is not passing microphone audio to web pages on
+that device, and the page cannot work around it; recording with another app and using
+"Choose audio file" keeps working.
+
+`node test/test_recorder.js` exercises these paths with stand-in browser objects.
+
+### AMR files from phone voice recorders
+
+Browsers do not decode AMR, so `.amr` recordings (AMR-NB, the 8 kHz format of Android voice
+recorders) go through a bundled decoder: `vendor/amrnb.js`, which is
+[opencore-amr](https://sourceforge.net/projects/opencore-amr/) compiled to asm.js by the
+[opencore-amr-js](https://github.com/yxl/opencore-amr-js) project (Apache-2.0, commit `dcf3d2b`,
+unmodified). asm.js is ordinary JavaScript, so this adds no WebAssembly. The page fetches the
+decoder (0.5 MB) only when an AMR file is chosen, and the audio is resampled from 8 to 16 kHz for
+the model. The command line reads `.amr` too.
+
+AMR-WB (`#!AMR-WB` files) and AMR inside a `.3gp` container are not supported.
 
 From the command line:
 
 ```bash
 node whistle_cli.js whistle_recording_16k.wav
+node whistle_cli.js test/audio/jfk.amr
 ```
 
 Options: `--language en|de|fr|es|it|nl|pl` (default: detect), `--greedy` (one beam, faster),
@@ -137,7 +179,8 @@ Inference is synchronous and takes seconds, so in a page run it in a worker; `wh
 | `index.html`, `app.js` | the demo page: model download, file input, progress |
 | `recorder.js` | microphone capture: raw PCM through Web Audio, MediaRecorder as backup, diagnostics |
 | `serve.js` | static file server for the page; `--lan` adds HTTPS for phones |
-| `whistle_cli.js` | command line front end, WAV reader and resampler |
+| `whistle_cli.js` | command line front end, WAV and AMR readers, resampler |
+| `vendor/amrnb.js` | third-party AMR-NB decoder (opencore-amr as asm.js), with its licence and notice beside it |
 | `test/test.js` | regression test against stored reference outputs |
 | `test/test_recorder.js` | microphone capture logic against stand-in browser objects |
 | `test/reference_wasm.js` | side-by-side comparison with the official `needle.wasm` (development only) |

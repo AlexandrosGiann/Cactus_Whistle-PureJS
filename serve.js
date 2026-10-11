@@ -22,7 +22,7 @@ var httpsPort = +process.env.HTTPS_PORT || 8443;
 var types = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.wav': 'audio/wav',
-  '.cact': 'application/octet-stream', '.md': 'text/plain; charset=utf-8'
+  '.cact': 'application/octet-stream', '.amr': 'audio/amr', '.md': 'text/plain; charset=utf-8'
 };
 
 // ------------------------------------------------------------ certificates
