@@ -173,7 +173,7 @@ function handler(req, res) {
 }
 
 function checkFiles() {
-  ['index.html', 'app.js', 'whistle.js', 'whistle_worker.js', 'whistle.cact'].forEach(function (f) {
+  ['index.html', 'app.js', 'recorder.js', 'whistle.js', 'whistle_worker.js', 'whistle.cact'].forEach(function (f) {
     if (!fs.existsSync(path.join(root, f))) console.log('WARNING: ' + f + ' is missing from ' + root);
   });
   if (!fs.existsSync(path.join(root, 'whistle_recording_16k.wav')) && !fs.existsSync(path.join(root, 'test', 'audio', 'jfk.wav'))) {

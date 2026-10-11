@@ -43,6 +43,7 @@ var model = new Whistle.Model(fs.readFileSync(path.join(root, 'whistle.cact')));
 console.log('model: ' + model.cact.numTensors + ' tensors, loaded in ' + (Date.now() - t0) + ' ms');
 
 CASES.forEach(function (c) {
+  if (!fs.existsSync(path.join(root, c.file))) { console.log(c.file + '\n  skip  not in this checkout'); return; }
   var wav = cli.readWav(path.join(root, c.file));
   console.log(c.file + ' (' + (wav.samples.length / wav.rate).toFixed(2) + ' s)');
   if (c.embed) {

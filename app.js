@@ -16,7 +16,7 @@ var el = {
   record: $('recordButton'), recordLabel: $('recordLabel'), file: $('audioFile'), sample: $('sampleButton'),
   language: $('language'), mode: $('mode'), clip: $('clip'), player: $('player'), clipInfo: $('clipInfo'),
   runBar: $('runBar'), runStatus: $('runStatus'), transcript: $('transcript'), details: $('details'),
-  copy: $('copyButton'), meter: $('meter')
+  copy: $('copyButton'), meter: $('meter'), diagLog: $('diagLog'), diagCopy: $('diagCopy')
 };
 
 var engine = null;          // { transcribe(pcm, opts, handlers) }
@@ -220,71 +220,82 @@ function wavBlob(samples) {
 
 // --------------------------------------------------------------- recording
 
-var rec = null;
+var diagLines = [];
 
-function startRecording() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    fail(window.isSecureContext === false
-      ? 'The browser only allows the microphone on https://. Start the server with "node serve.js --lan" and open the https:// address it prints.'
-      : 'The microphone is not available in this browser.');
-    return;
-  }
-  setRun('Waiting for microphone permission...', 0);
-  navigator.mediaDevices.getUserMedia({
-    audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-  }).then(function (stream) {
-    var Ctx = window.AudioContext || window.webkitAudioContext, ctx = new Ctx();
-    var source = ctx.createMediaStreamSource(stream);
-    // ScriptProcessor is deprecated but works on every engine that has Web Audio.
-    var proc = ctx.createScriptProcessor(4096, 1, 1), mute = ctx.createGain();
-    mute.gain.value = 0;
-    rec = { ctx: ctx, stream: stream, source: source, proc: proc, mute: mute, chunks: [], samples: 0, started: performance.now() };
-    proc.onaudioprocess = function (ev) {
-      if (!rec) return;
-      var d = ev.inputBuffer.getChannelData(0), peak = 0;
-      rec.chunks.push(new Float32Array(d));
-      rec.samples += d.length;
-      for (var i = 0; i < d.length; i += 16) { var a = Math.abs(d[i]); if (a > peak) peak = a; }
-      el.meter.style.width = Math.min(100, Math.round(peak * 140)) + '%';
-      var secs = rec.samples / ctx.sampleRate;
-      el.recordLabel.textContent = 'Stop (' + secs.toFixed(1) + ' s)';
-      if (secs >= MAX_RECORD_SECONDS) stopRecording();
-    };
-    source.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
-    el.record.classList.add('recording');
-    el.recordLabel.textContent = 'Stop';
-    setRun('Recording... speak, then press Stop.', 0);
-    updateButtons();
-  }).catch(function (e) {
-    fail('Microphone error: ' + (e.message || e.name || e));
+// Shown in the "Microphone diagnostics" panel: a phone has no developer console to read.
+function diag(text) {
+  var t = (performance.now() / 1000).toFixed(2);
+  diagLines.push('[' + t + '] ' + text);
+  if (diagLines.length > 300) diagLines.shift();
+  if (el.diagLog) el.diagLog.textContent = diagLines.join('\n');
+  if (window.console && console.log) console.log('[mic] ' + text);
+}
+
+function decodeBlob(blob) {
+  return readFile(blob).then(function (ab) {
+    diag('decoding ' + ab.byteLength + ' bytes of ' + (blob.type || 'unknown type'));
+    return decodeFile(ab);
   });
 }
 
+var recorder = new WhistleRecorder.Recorder({
+  navigator: navigator, AudioContext: window.AudioContext || window.webkitAudioContext,
+  MediaRecorder: window.MediaRecorder, Blob: window.Blob, isSecureContext: window.isSecureContext,
+  now: function () { return performance.now(); }, log: diag, decodeBlob: decodeBlob,
+  maxSeconds: MAX_RECORD_SECONDS,
+  onLevel: function (peak, seconds) {
+    el.meter.style.width = Math.min(100, Math.round(peak * 140)) + '%';
+    el.recordLabel.textContent = 'Stop (' + seconds.toFixed(1) + ' s)';
+  },
+  onEnded: function () { stopRecording(); }
+});
+
+function recordingUi(on) {
+  el.record.classList.toggle('recording', on);
+  el.recordLabel.textContent = on ? 'Stop' : 'Record';
+  if (!on) el.meter.style.width = '0%';
+  updateButtons();
+}
+
+function startRecording() {
+  el.runStatus.classList.remove('error');
+  setRun('Waiting for microphone permission...', 0);
+  diag('--- record pressed');
+  // start() runs inside the tap so the browser lets the audio context run
+  recorder.start().then(function () {
+    recordingUi(true);
+    setRun('Recording... speak, then press Stop.', 0);
+  }, function (e) {
+    if (e.code === 'busy') return;
+    recordingUi(false);
+    fail(e.message || String(e));
+  });
+  updateButtons();
+}
+
 function stopRecording() {
-  if (!rec) return;
-  var r = rec;
-  rec = null;
-  try { r.proc.disconnect(); r.source.disconnect(); r.mute.disconnect(); } catch (e) {}
-  var tracks = r.stream.getTracks();
-  for (var i = 0; i < tracks.length; i++) tracks[i].stop();
-  var rate = r.ctx.sampleRate;
-  try { r.ctx.close(); } catch (e) {}
-  el.record.classList.remove('recording');
-  el.recordLabel.textContent = 'Record';
-  el.meter.style.width = '0%';
-  var all = new Float32Array(r.samples), o = 0;
-  for (i = 0; i < r.chunks.length; i++) { all.set(r.chunks[i], o); o += r.chunks[i].length; }
-  if (all.length < rate / 10) { fail('The recording is too short.'); updateButtons(); return; }
-  resample(all, rate).then(function (pcm) { run(pcm, 'Recording'); });
+  recorder.stop().then(function (r) {
+    recordingUi(false);
+    return resample(r.samples, r.rate).then(function (pcm) {
+      diag('ready for the model: ' + pcm.length + ' samples at ' + RATE + ' Hz (' + (pcm.length / RATE).toFixed(2) +
+        ' s) from ' + r.source);
+      run(pcm, r.source === 'pcm' ? 'Recording' : 'Recording (MediaRecorder)');
+    });
+  }, function (e) {
+    if (e.code === 'ignored') return;
+    recordingUi(false);
+    if (e.code !== 'not-recording') fail(e.message || String(e));
+  });
 }
 
 // ---------------------------------------------------------------------- UI
 
 function updateButtons() {
   var idle = ready && !busy;
-  el.record.disabled = !(idle || rec);
-  el.file.disabled = !idle || !!rec;
-  el.sample.disabled = !idle || !!rec;
+  var mic = recorder.state !== 'idle';
+  el.record.disabled = !(idle || mic);
+  el.file.disabled = !idle || mic;
+  el.sample.disabled = !idle || mic;
   el.file.parentNode.classList.toggle('disabled', el.file.disabled);
 }
 
@@ -376,7 +387,18 @@ function readFile(f) {
   });
 }
 
-el.record.onclick = function () { if (rec) stopRecording(); else startRecording(); };
+el.record.onclick = function () {
+  if (recorder.state === 'idle') startRecording();
+  else if (recorder.state === 'recording') stopRecording();
+  else diag('tap ignored while ' + recorder.state);
+};
+el.diagCopy.onclick = function () {
+  var text = diagLines.join('\n');
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text);
+  else { var r = document.createRange(); r.selectNodeContents(el.diagLog); var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r); try { document.execCommand('copy'); } catch (e) {} }
+  el.diagCopy.textContent = 'Copied';
+  setTimeout(function () { el.diagCopy.textContent = 'Copy log'; }, 1200);
+};
 el.sample.onclick = function () { loadSample(SAMPLE_URLS, 'Sample clip'); };
 el.file.onchange = function () {
   var f = el.file.files[0];
@@ -398,6 +420,7 @@ el.copy.onclick = function () {
   setTimeout(function () { el.copy.textContent = 'Copy'; }, 1200);
 };
 
+recorder.probe();
 updateButtons();
 fetchModel().then(installModel).catch(function (e) {
   el.modelStatus.textContent = 'Automatic model download failed (' + (e.message || e) +

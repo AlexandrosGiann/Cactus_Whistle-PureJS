@@ -62,6 +62,32 @@ The server only delivers files. The model still runs entirely in the phone's bro
 JavaScript. "Try the sample clip" uses `whistle_recording_16k.wav` and falls back to
 `test/audio/jfk.wav`, so at least one of the two must be in the folder being served.
 
+### Microphone on older Android browsers
+
+Recording used to end with "The recording is too short" on an older Android phone. The page created
+its audio context only after the permission prompt had been answered, which is outside the tap, and
+mobile Chrome keeps such a context suspended: no audio callbacks ever ran, so nothing was captured.
+`recorder.js` now:
+
+- creates and resumes the audio context inside the tap itself, resumes it again once the microphone
+  is granted, and once more if no audio has arrived after 1.2 s;
+- captures raw PCM with `getUserMedia` + `ScriptProcessor` as before, and runs a `MediaRecorder`
+  beside it where one exists; the recorded blob is decoded and used only when the PCM path delivered
+  nothing or far less than the elapsed time;
+- retries with plain `{ audio: true }` when the browser rejects the detailed constraints, and falls
+  back to the prefixed callback `getUserMedia` on browsers without `navigator.mediaDevices`;
+- ignores a second tap within 350 ms of the first (a double-fired tap would start and stop at once)
+  and taps made while the permission prompt is open;
+- stops cleanly when the microphone track ends by itself, keeping what was captured;
+- reports what actually happened: permission denied, no microphone, only silence delivered, or no
+  audio arrived, instead of one generic message.
+
+**Microphone diagnostics**, under the Audio buttons, lists what the browser offers (secure context,
+permission state, `MediaRecorder` and its formats) and, for every recording, the audio context
+state and sample rate, the track settings, the number of audio callbacks and PCM samples, the peak
+level, the `MediaRecorder` blob type and size, and the decoded sample count. "Copy log" puts it on
+the clipboard. `node test/test_recorder.js` exercises these paths with stand-in browser objects.
+
 From the command line:
 
 ```bash
@@ -108,10 +134,12 @@ Inference is synchronous and takes seconds, so in a page run it in a worker; `wh
 |---|---|
 | `whistle.js` | the runtime: `.cact` reader, front end, stem, encoder, decoder, beam search, detokeniser |
 | `whistle_worker.js` | Web Worker wrapper used by the page |
-| `index.html`, `app.js` | the demo page: model download, microphone, file input, progress |
+| `index.html`, `app.js` | the demo page: model download, file input, progress |
+| `recorder.js` | microphone capture: raw PCM through Web Audio, MediaRecorder as backup, diagnostics |
 | `serve.js` | static file server for the page; `--lan` adds HTTPS for phones |
 | `whistle_cli.js` | command line front end, WAV reader and resampler |
 | `test/test.js` | regression test against stored reference outputs |
+| `test/test_recorder.js` | microphone capture logic against stand-in browser objects |
 | `test/reference_wasm.js` | side-by-side comparison with the official `needle.wasm` (development only) |
 | `whistle.cact` | the model, unchanged from Hugging Face |
 
