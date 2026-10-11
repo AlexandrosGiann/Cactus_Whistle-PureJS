@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Whistle — Pure JavaScript</title>
+<style>
+:root {
+  --bg: #f6f5f1; --card: #ffffff; --ink: #1c1d1a; --muted: #6a6c64; --line: #dedcd3;
+  --accent: #2f7d4f; --accent-ink: #ffffff; --danger: #c0392b; --track: #e8e6dd;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141512; --card: #1d1f1b; --ink: #ecebe4; --muted: #9c9e94; --line: #30332c;
+    --accent: #58b17c; --accent-ink: #0d1a12; --danger: #e8705f; --track: #2a2d26;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+main { max-width: 760px; margin: 0 auto; padding: 28px 16px 48px; }
+h1 { font-size: 1.6rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+.lede { margin: 0 0 22px; color: var(--muted); }
+section {
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 16px 18px; margin: 0 0 14px;
+}
+h2 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; }
+.bar { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; margin-top: 10px; }
+.bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.15s linear; }
+.bar.done > i { opacity: 0.45; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+button, .filebutton, select {
+  font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line);
+  border-radius: 8px; padding: 9px 14px; cursor: pointer; min-height: 42px;
+}
+button:hover:not(:disabled), .filebutton:hover { border-color: var(--muted); }
+button:disabled, .filebutton.disabled { opacity: 0.45; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button.primary.recording { background: var(--danger); border-color: var(--danger); color: #fff; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: currentColor; margin-right: 8px; }
+.recording .dot { border-radius: 2px; }
+.filebutton { display: inline-flex; align-items: center; }
+.filebutton input { display: none; }
+.options { margin-top: 12px; color: var(--muted); font-size: 0.92rem; }
+.options label { display: inline-flex; align-items: center; gap: 6px; }
+.options select { min-height: 36px; padding: 5px 8px; }
+.meter { height: 3px; margin-top: 12px; background: var(--track); border-radius: 2px; overflow: hidden; }
+.meter > i { display: block; height: 100%; width: 0; background: var(--danger); }
+#clip { margin-top: 12px; }
+#clip audio { width: 100%; height: 36px; }
+#clipInfo, #runStatus, #modelStatus, #details { color: var(--muted); font-size: 0.92rem; }
+#runStatus.error { color: var(--danger); }
+#transcript {
+  min-height: 96px; margin: 12px 0 8px; padding: 14px 16px; border-radius: 8px;
+  background: var(--bg); border: 1px solid var(--line); font-size: 1.15rem; white-space: pre-wrap;
+  word-break: break-word;
+}
+#transcript.pending { color: var(--muted); }
+#transcript.empty { color: var(--muted); font-style: italic; }
+#transcript:empty::before { content: "The transcript appears here."; color: var(--muted); font-size: 1rem; }
+.foot { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.foot button { min-height: 32px; padding: 4px 10px; font-size: 0.88rem; }
+footer { color: var(--muted); font-size: 0.85rem; margin-top: 18px; }
+footer a { color: inherit; }
+code { font-family: ui-monospace, Consolas, monospace; font-size: 0.92em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Whistle — Pure JavaScript</h1>
+  <p class="lede">Speech to text that runs entirely in this tab. No WASM, no native code, no server: your audio never leaves the device.</p>
+
+  <section>
+    <h2>Model</h2>
+    <div id="modelStatus">Starting...</div>
+    <div class="bar"><i id="modelBar"></i></div>
+    <div id="modelPick" class="row" hidden style="margin-top:12px">
+      <label class="filebutton">Choose whistle.cact<input id="modelFile" type="file" accept=".cact,application/octet-stream"></label>
+    </div>
+  </section>
+
+  <section>
+    <h2>Audio</h2>
+    <div class="row">
+      <button id="recordButton" class="primary" disabled><span class="dot"></span><span id="recordLabel">Record</span></button>
+      <label class="filebutton">Choose audio file<input id="audioFile" type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac,.webm"></label>
+      <button id="sampleButton" disabled>Try the sample clip</button>
+    </div>
+    <div class="meter"><i id="meter"></i></div>
+    <div class="row options">
+      <label>Language
+        <select id="language">
+          <option value="">Detect</option>
+          <option value="en">English</option>
+          <option value="de">German</option>
+          <option value="fr">French</option>
+          <option value="es">Spanish</option>
+          <option value="it">Italian</option>
+          <option value="nl">Dutch</option>
+          <option value="pl">Polish</option>
+        </select>
+      </label>
+      <label>Search
+        <select id="mode">
+          <option value="accurate">5 beams (as the reference engine)</option>
+          <option value="fast">Greedy (about 4× faster decoding)</option>
+        </select>
+      </label>
+    </div>
+    <div id="clip" hidden>
+      <audio id="player" controls></audio>
+      <div id="clipInfo"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Transcript</h2>
+    <div id="runStatus">Load the model, then record or choose a clip.</div>
+    <div class="bar"><i id="runBar"></i></div>
+    <div id="transcript"></div>
+    <div class="foot">
+      <div id="details"></div>
+      <button id="copyButton" hidden>Copy</button>
+    </div>
+  </section>
+
+  <footer>
+    Runs <a href="https://huggingface.co/Cactus-Compute/whistle">Cactus Whistle</a> (<code>whistle.cact</code>, 16.9 MB)
+    with <code>whistle.js</code>. English, German, French, Spanish, Italian, Dutch and Polish; clips over 30 s are split at pauses.
+  </footer>
+</main>
+
+<script src="whistle.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
