@@ -3,7 +3,8 @@
 'use strict';
 
 var MODEL_URL = 'whistle.cact';
-var SAMPLE_URL = 'whistle_recording_16k.wav';
+// tried in order: a checkout without the first clip still has the second
+var SAMPLE_URLS = ['whistle_recording_16k.wav', 'test/audio/jfk.wav'];
 var RATE = 16000;
 var MAX_RECORD_SECONDS = 120;
 var LANGUAGE_NAMES = { en: 'English', de: 'German', fr: 'French', es: 'Spanish', it: 'Italian', nl: 'Dutch', pl: 'Polish' };
@@ -223,7 +224,9 @@ var rec = null;
 
 function startRecording() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    fail('The microphone is not available here. It needs https:// or http://localhost.');
+    fail(window.isSecureContext === false
+      ? 'The browser only allows the microphone on https://. Start the server with "node serve.js --lan" and open the https:// address it prints.'
+      : 'The microphone is not available in this browser.');
     return;
   }
   setRun('Waiting for microphone permission...', 0);
@@ -347,30 +350,46 @@ function run(pcm, label) {
   });
 }
 
-function loadUrl(url, label) {
+function fetchFirst(urls, i) {
+  return fetch(urls[i]).then(function (r) {
+    if (r.ok) return r.arrayBuffer();
+    if (i + 1 < urls.length) return fetchFirst(urls, i + 1);
+    throw new Error('none of ' + urls.join(', ') + ' is on the server (HTTP ' + r.status + ')');
+  });
+}
+
+function loadSample(urls, label) {
   setRun('Loading ' + label + '...', 0.01);
-  fetch(url).then(function (r) {
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return r.arrayBuffer();
-  }).then(decodeFile).then(function (pcm) { run(pcm, label); }).catch(function (e) {
+  fetchFirst(urls, 0).then(decodeFile).then(function (pcm) { run(pcm, label); }).catch(function (e) {
     fail('Could not load ' + label + ': ' + (e.message || e));
   });
 }
 
+// File.arrayBuffer() is missing on older browsers; FileReader is everywhere.
+function readFile(f) {
+  if (f.arrayBuffer) return f.arrayBuffer();
+  return new Promise(function (resolve, reject) {
+    var fr = new FileReader();
+    fr.onload = function () { resolve(fr.result); };
+    fr.onerror = function () { reject(fr.error || new Error('could not read the file')); };
+    fr.readAsArrayBuffer(f);
+  });
+}
+
 el.record.onclick = function () { if (rec) stopRecording(); else startRecording(); };
-el.sample.onclick = function () { loadUrl(SAMPLE_URL, 'Sample clip'); };
+el.sample.onclick = function () { loadSample(SAMPLE_URLS, 'Sample clip'); };
 el.file.onchange = function () {
   var f = el.file.files[0];
   if (!f) return;
   setRun('Decoding ' + f.name + '...', 0.01);
-  f.arrayBuffer().then(decodeFile).then(function (pcm) { run(pcm, f.name); }).catch(function (e) {
+  readFile(f).then(decodeFile).then(function (pcm) { run(pcm, f.name); }).catch(function (e) {
     fail('Could not read ' + f.name + ': ' + (e.message || e));
   });
   el.file.value = '';
 };
 el.modelFile.onchange = function () {
   var f = el.modelFile.files[0];
-  if (f) f.arrayBuffer().then(installModel);
+  if (f) readFile(f).then(installModel);
 };
 el.copy.onclick = function () {
   var text = el.transcript.textContent;

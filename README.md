@@ -17,6 +17,51 @@ Then open <http://localhost:8766/>. The page downloads `whistle.cact` from the s
 record from the microphone, choose an audio file, or try the bundled sample clip. The page has to be
 served over HTTP: browsers block `fetch`, workers and the microphone on `file://`.
 
+### On a phone (same Wi-Fi)
+
+Browsers allow the microphone only on `https://` (or `localhost`), so a phone needs the HTTPS address.
+On the computer that holds this folder (Node 16 or newer, nothing else to install):
+
+```bash
+node serve.js --lan
+```
+
+It detects the computer's network address and prints three lines per address, for example:
+
+```
+Page (microphone works):   https://192.168.1.50:8443/
+Certificate for the phone: http://192.168.1.50:8766/ca.crt
+Plain HTTP (no microphone): http://192.168.1.50:8766/
+```
+
+Use the addresses your own run prints. The first run creates a private certificate authority in
+`.cert/`; the phone has to trust it once:
+
+1. On the phone, open the `http://.../ca.crt` address in Chrome and download the file.
+2. Open **Settings → Security & privacy → More security settings → Encryption & credentials →
+   Install a certificate → CA certificate** (on some phones: Settings → Security → Install from
+   storage; searching Settings for "CA certificate" finds it). Confirm the warning and pick
+   `whistle-demo-ca.crt`. Android asks for a screen lock if none is set.
+3. Open the `https://...:8443/` address in Chrome. Allow the microphone when asked.
+
+The certificate authority is reused on later runs, and the server certificate is renewed by itself
+when the computer's address changes, so the phone is set up only once per computer.
+If the phone cannot connect at all, allow Node through the computer's firewall for private networks
+and check that both devices are on the same network (not a guest Wi-Fi with client isolation).
+
+Without installing anything, there are two alternatives: on Chrome's warning page for the
+`https://` address choose **Advanced → Proceed**, or open `chrome://flags`, search for
+"Insecure origins treated as secure", add the plain `http://...:8766` address, enable and relaunch.
+
+`.cert/` holds private keys: it is in `.gitignore`, the server refuses to serve it, and it should
+never be shared. Anyone holding `.cert/ca.key.pem` could impersonate sites to a phone that trusts
+this authority, so remove the certificate from the phone (Settings → Encryption & credentials →
+User credentials / Trusted credentials → User) when you are done testing.
+
+The server only delivers files. The model still runs entirely in the phone's browser, in plain
+JavaScript. "Try the sample clip" uses `whistle_recording_16k.wav` and falls back to
+`test/audio/jfk.wav`, so at least one of the two must be in the folder being served.
+
 From the command line:
 
 ```bash
@@ -64,7 +109,7 @@ Inference is synchronous and takes seconds, so in a page run it in a worker; `wh
 | `whistle.js` | the runtime: `.cact` reader, front end, stem, encoder, decoder, beam search, detokeniser |
 | `whistle_worker.js` | Web Worker wrapper used by the page |
 | `index.html`, `app.js` | the demo page: model download, microphone, file input, progress |
-| `serve.js` | static file server for the page |
+| `serve.js` | static file server for the page; `--lan` adds HTTPS for phones |
 | `whistle_cli.js` | command line front end, WAV reader and resampler |
 | `test/test.js` | regression test against stored reference outputs |
 | `test/reference_wasm.js` | side-by-side comparison with the official `needle.wasm` (development only) |

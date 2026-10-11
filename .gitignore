@@ -1,0 +1,6 @@
+# local HTTPS keys created by "node serve.js --lan"
+.cert/
+# float checkpoint, not used at run time and over GitHub's file limit
+whistle.safetensors
+.claude/
+node_modules/
