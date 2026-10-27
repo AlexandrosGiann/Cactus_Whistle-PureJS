@@ -118,7 +118,7 @@ var LATIN_OPTS = {};
 // string, each written as <shared prefix length><cost><rest of the word>, with
 // the two counts as characters from '0' (code 48) up. Cost = -ln p in units of 0.25.
 function Lexicon(text) {
-  var lines = text.split('\n'), header = lines[0];
+  var lines = text.split(/\r?\n/), header = lines[0];       // a Windows checkout may add \r
   if (header.indexOf('whistle-greek-lexicon') !== 0) throw new Error('not a Whistle Greek lexicon');
   var n = 0, total = 0, i, end = lines.length;
   // after the words: "#grammar", then <word> TAB <ending of the next word> TAB <4 x ln ratio>
