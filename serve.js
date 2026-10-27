@@ -13,7 +13,7 @@
 'use strict';
 
 var http = require('http'), https = require('https'), fs = require('fs'), path = require('path');
-var os = require('os'), crypto = require('crypto');
+var os = require('os'), crypto = require('crypto'), zlib = require('zlib');
 
 var root = __dirname, certDir = path.join(root, '.cert');
 var args = process.argv.slice(2), lan = args.indexOf('--lan') >= 0;
@@ -22,8 +22,11 @@ var httpsPort = +process.env.HTTPS_PORT || 8443;
 var types = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.wav': 'audio/wav',
-  '.cact': 'application/octet-stream', '.amr': 'audio/amr', '.md': 'text/plain; charset=utf-8'
+  '.cact': 'application/octet-stream', '.amr': 'audio/amr', '.md': 'text/plain; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8'
 };
+// sent gzip-compressed to browsers that accept it (the Greek word list shrinks from 7 MB to 1.5 MB)
+var COMPRESS = { '.txt': true, '.js': true, '.html': true };
 
 // ------------------------------------------------------------ certificates
 
@@ -163,12 +166,14 @@ function handler(req, res) {
   }
   fs.stat(file, function (err, st) {
     if (err || !st.isFile()) { res.writeHead(404); res.end('not found'); return; }
-    res.writeHead(200, {
-      'Content-Type': types[path.extname(file).toLowerCase()] || 'application/octet-stream',
-      'Content-Length': st.size, 'Cache-Control': 'no-cache'
-    });
+    var ext = path.extname(file).toLowerCase();
+    var gzip = COMPRESS[ext] && st.size > 1024 && /\bgzip\b/.test(req.headers['accept-encoding'] || '');
+    var head = { 'Content-Type': types[ext] || 'application/octet-stream', 'Cache-Control': 'no-cache' };
+    if (gzip) { head['Content-Encoding'] = 'gzip'; head.Vary = 'Accept-Encoding'; } else head['Content-Length'] = st.size;
+    res.writeHead(200, head);
     if (req.method === 'HEAD') { res.end(); return; }
-    fs.createReadStream(file).pipe(res);
+    if (gzip) fs.createReadStream(file).pipe(zlib.createGzip()).pipe(res);
+    else fs.createReadStream(file).pipe(res);
   });
 }
 

@@ -7,6 +7,17 @@ var model = null;
 
 function post(msg, transfer) { self.postMessage(msg, transfer || []); }
 
+// Greek is fetched the first time it is asked for: greek.js and its 7 MB word list.
+function loadGreek(id) {
+  post({ type: 'progress', id: id, stage: 'lexicon', fraction: 0 });
+  importScripts('greek.js');
+  var x = new XMLHttpRequest();
+  x.open('GET', 'greek/el_lexicon.txt', false);            // a synchronous request is allowed in a worker
+  x.send();
+  if (x.status !== 200) throw new Error('greek/el_lexicon.txt could not be loaded (HTTP ' + x.status + ')');
+  model.greek = new WhistleGreek.Decoder(new WhistleGreek.Lexicon(x.responseText));
+}
+
 self.onmessage = function (ev) {
   var m = ev.data;
   try {
@@ -19,6 +30,7 @@ self.onmessage = function (ev) {
       });
     } else if (m.type === 'transcribe') {
       if (!model) throw new Error('model is not loaded');
+      if (m.language === 'el' && !model.greek) loadGreek(m.id);
       var last = 0;
       var r = model.transcribe(m.pcm, {
         language: m.language || null,

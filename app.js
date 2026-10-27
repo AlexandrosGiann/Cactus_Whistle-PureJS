@@ -7,7 +7,8 @@ var MODEL_URL = 'whistle.cact';
 var SAMPLE_URLS = ['whistle_recording_16k.wav', 'test/audio/jfk.wav'];
 var RATE = 16000;
 var MAX_RECORD_SECONDS = 120;
-var LANGUAGE_NAMES = { en: 'English', de: 'German', fr: 'French', es: 'Spanish', it: 'Italian', nl: 'Dutch', pl: 'Polish' };
+var LANGUAGE_NAMES = { en: 'English', de: 'German', fr: 'French', es: 'Spanish', it: 'Italian', nl: 'Dutch', pl: 'Polish',
+  el: 'Greek' };
 
 function $(id) { return document.getElementById(id); }
 
@@ -76,15 +77,39 @@ function inlineEngine(buffer) {
   return {
     info: { ms: performance.now() - t0, tensors: model.cact.numTensors, bytes: buffer.byteLength, inline: true },
     transcribe: function (pcm, opts, h) {
-      setTimeout(function () {
+      var go = function () {
         try {
           var r = model.transcribe(pcm, { language: opts.language, beams: opts.beams });
           h.done({ text: r.text, language: r.language, silent: r.silent, tokens: r.tokens.length,
             timings: r.timings, seconds: pcm.length / RATE });
         } catch (e) { h.error(String(e.message || e)); }
-      }, 30);
+      };
+      if (opts.language === 'el' && !model.greek) {
+        h.progress('lexicon', 0);
+        loadGreekInline().then(function (g) { model.greek = g; setTimeout(go, 30); },
+          function (e) { h.error(String(e.message || e)); });
+      } else setTimeout(go, 30);
     }
   };
+}
+
+// greek.js and its word list, for the main-thread fallback (the worker loads its own).
+function loadGreekInline() {
+  return new Promise(function (resolve, reject) {
+    if (typeof WhistleGreek !== 'undefined') { resolve(); return; }
+    var s = document.createElement('script');
+    s.src = 'greek.js';
+    s.onload = function () { resolve(); };
+    s.onerror = function () { reject(new Error('greek.js could not be loaded')); };
+    document.head.appendChild(s);
+  }).then(function () {
+    return fetch('greek/el_lexicon.txt');
+  }).then(function (res) {
+    if (!res.ok) throw new Error('greek/el_lexicon.txt could not be loaded (HTTP ' + res.status + ')');
+    return res.text();
+  }).then(function (text) {
+    return new WhistleGreek.Decoder(new WhistleGreek.Lexicon(text));
+  });
 }
 
 function installModel(buffer) {
@@ -417,7 +442,8 @@ function run(pcm, label) {
     progress: function (stage, fraction, overall) {
       var f = windows > 1 && overall !== undefined ? overall
         : stage === 'encoder' ? 0.05 + 0.45 * fraction : stage === 'decoder' ? 0.5 : 0.03;
-      setRun(stage === 'encoder' ? 'Listening (encoder)...' : stage === 'decoder' ? 'Writing (decoder)...' : 'Reading audio...', f);
+      setRun(stage === 'encoder' ? 'Listening (encoder)...' : stage === 'decoder' ? 'Writing (decoder)...'
+        : stage === 'lexicon' ? 'Loading the Greek word list (first time only)...' : 'Reading audio...', f);
     },
     partial: function (text) {
       el.transcript.textContent = (prefix ? prefix + ' ' : '') + text;

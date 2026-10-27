@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* Command line front end: node whistle_cli.js clip.wav|clip.amr [--language en] [--greedy] [--json] [--model whistle.cact] */
+/* Command line front end: node whistle_cli.js clip.wav|clip.amr [--language en|el] [--greedy] [--json] [--model whistle.cact] */
 'use strict';
 
 var fs = require('fs'), path = require('path');
@@ -91,10 +91,15 @@ function main(argv) {
     else opts.files.push(a);
   }
   if (opts.help || !opts.files.length) {
-    console.log('usage: node whistle_cli.js clip.wav|clip.amr [more] [--language en|de|fr|es|it|nl|pl] [--greedy] [--json] [--model whistle.cact]');
+    console.log('usage: node whistle_cli.js clip.wav|clip.amr [more] [--language en|de|fr|es|it|nl|pl|el] [--greedy] [--json] [--model whistle.cact]');
     return opts.help ? 0 : 1;
   }
   var model = new Whistle.Model(fs.readFileSync(opts.model));
+  if (opts.language === 'el') {
+    // Greek: the decoder of greek.js and its word list (see the README)
+    var Greek = require('./greek.js');
+    model.greek = new Greek.Decoder(new Greek.Lexicon(fs.readFileSync(path.join(__dirname, 'greek', 'el_lexicon.txt'), 'utf8')));
+  }
   opts.files.forEach(function (file) {
     var wav = readAudio(file), pcm = resample(wav.samples, wav.rate, 16000);
     var r = model.transcribe(pcm, { language: opts.language, beams: opts.beams });

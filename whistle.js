@@ -1227,8 +1227,13 @@ Model.prototype.loudnessRange = function (db) {
 };
 
 // Beam search over one encoded clip. Returns { tokens, language, score }.
+// language 'el' hands the search to the Greek decoder of greek.js (model.greek).
 Model.prototype.decode = function (enc, frames, opts) {
   opts = opts || {};
+  if (opts.language === 'el') {
+    if (!this.greek) throw new Error('Greek needs greek.js and its word list: set model.greek = new WhistleGreek.Decoder(lexicon)');
+    return this.greek.decode(this, enc, frames, opts);
+  }
   var dec = this.decoder, tk = this.tokenizer, textVocab = this.cfg.textVocab;
   var beamWidth = opts.beams || 5, perBeam = beamWidth + 1, maxLen = this.hdr.maxSeq - 1;
   var cross = dec.prepareCross(enc, frames), i, b;
@@ -1298,7 +1303,8 @@ Model.prototype.decode = function (enc, frames, opts) {
 };
 
 // Speech to text for 16 kHz mono float PCM in [-1, 1].
-// opts: { language: 'en'|'de'|'fr'|'es'|'it'|'nl'|'pl' (default: detect), beams: 5,
+// opts: { language: 'en'|'de'|'fr'|'es'|'it'|'nl'|'pl' (default: detect), or 'el' with
+//         model.greek set (see greek.js), beams: 5,
 //         onProgress(stage, fraction), onStep(step, partialText) }
 Model.prototype.transcribe = function (pcm, opts) {
   opts = opts || {};
@@ -1316,7 +1322,7 @@ Model.prototype.transcribe = function (pcm, opts) {
   prog('decoder', 0);
   var r = this.decode(enc, st.T, opts), t3 = now();
   return {
-    text: this.tokenizer.decode(r.tokens), language: r.language, tokens: r.tokens, silent: false,
+    text: r.text !== undefined ? r.text : this.tokenizer.decode(r.tokens), language: r.language, tokens: r.tokens, silent: false,
     frames: st.T, score: r.score,
     timings: { frontend: t1 - t0, encoder: t2 - t1, decoder: t3 - t2, total: t3 - t0, steps: r.steps }
   };
